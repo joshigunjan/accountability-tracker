@@ -142,7 +142,7 @@ launchctl list | grep accountability
 You should see something like:
 
 ```text
--    0    com.gunjan.accountability
+-    0    com.local.accountability
 ```
 
 ---
@@ -255,8 +255,8 @@ Answer the 30-minute check-ins honestly.
 Examples:
 
 ```text
-Instance segmentation
-XAI course preparation
+Debugging
+Course preparation
 Admin / email / meetings
 Break
 Distracted / not productive
