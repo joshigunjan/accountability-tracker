@@ -273,7 +273,7 @@ uv run python accountability_prompt.py --meeting
 Enter something like:
 
 ```text
-14:00-15:30 project meeting
+14:00-15:30 HAI meeting
 ```
 
 The tracker will pause prompts until the block ends.
@@ -340,49 +340,6 @@ The tracker includes automatic log-header repair for older CSV formats.
 
 ---
 
-## Updating the tracker
-
-After replacing files with a newer version:
-
-```bash
-cd ~/accountability-tracker
-chmod +x *.sh
-uv sync
-./stop_accountability.sh
-./start_accountability.sh 30
-```
-
-Then commit the update:
-
-```bash
-git add .
-git commit -m "Update accountability tracker"
-git push
-```
-
----
-
-## Privacy
-
-Your personal logs are stored locally under:
-
-```text
-~/Documents/autotime_sap/
-```
-
-The repository should contain only the code.
-
-Do not commit:
-
-```text
-*.csv
-*.xlsx
-*.log
-```
-
-The `.gitignore` file should exclude these by default.
-
----
 
 ## Project status
 
