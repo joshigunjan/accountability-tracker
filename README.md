@@ -1,4 +1,18 @@
-# Accountability Tracker v10
+
+## v13 overtime accounting check
+
+Version 13 adds end-of-day overtime accounting:
+
+- During the daily review, if you logged overtime, it asks whether you already added that overtime to your official time-management system.
+- `overtime.xlsx` now has accounting columns: `Accounted in time management`, `Accounted hours`, `Accounted at`, and `Accounted note`.
+- The `Summary` sheet now shows overtime done, overtime accounted for, and overtime not yet accounted.
+- You can manually run the accounting check with:
+
+```bash
+uv run python accountability_prompt.py --account-overtime
+```
+
+# Accountability Tracker v13
 
 A lightweight local macOS self-accountability and overtime management system.
 
@@ -10,6 +24,59 @@ This project is no longer SAP-focused. It is designed to help you:
 - classify outside-hours activity as work, private, break, or distracted
 - keep a live overtime workbook
 - review the day and carry unfinished tasks forward
+
+
+
+
+## v12 reliability commands
+
+Run a quick status check:
+
+```bash
+uv run python accountability_prompt.py --status
+```
+
+Run the doctor/repair command:
+
+```bash
+uv run python accountability_prompt.py --doctor
+```
+
+Repair only the activity log header:
+
+```bash
+uv run python accountability_prompt.py --repair-logs
+```
+
+After updating versions, restart the LaunchAgent so macOS uses this folder:
+
+```bash
+./stop_accountability.sh
+./start_accountability.sh 30
+```
+
+
+## v11/v12 fixes
+
+Version 13 is a reliability cleanup release. It includes the v11 fixes and adds diagnostics:
+
+- Automatic repair for old or corrupted `autotime_log.csv` headers.
+- Daily summary counts both normal log rows and overtime workbook rows.
+- Meeting/focus blocks are visible in the popup and via `--meeting`.
+- `--status` shows day status, next prompt, quiet period, and today's counts.
+- `--doctor` checks the LaunchAgent, runner path, log header, overtime file, and common configuration problems.
+
+Quick meeting command:
+
+```bash
+uv run python accountability_prompt.py --meeting
+```
+
+or:
+
+```bash
+./add_meeting_block.sh
+```
 
 
 ## v10 overtime sheet fix

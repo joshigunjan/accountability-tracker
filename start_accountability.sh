@@ -59,6 +59,8 @@ EOF
 plutil -lint "$PLIST"
 launchctl load "$PLIST"
 
-echo "Started accountability tracker. Visible prompt interval: ${INTERVAL_MINUTES} minutes."
+echo "Started accountability tracker v12. Visible prompt interval: ${INTERVAL_MINUTES} minutes."
 echo "Data folder: $HOME/Documents/autotime_sap"
 echo "Overtime workbook: $HOME/Documents/autotime_sap/overtime.xlsx"
+
+echo "Run health check with: cd '$REPO_DIR' && uv run python accountability_prompt.py --doctor"

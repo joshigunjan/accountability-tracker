@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """macOS self-accountability and overtime tracker.
 
+Version: v13 overtime accounting check.
+
 This script is intentionally small and local-only. It uses AppleScript popups,
 CSV files for normal logs/todos, and an Excel workbook for overtime.
 
@@ -36,6 +38,8 @@ OVERTIME_XLSX = DATA_DIR / "overtime.xlsx"
 PRIVATE_CSV = DATA_DIR / "private_ignored.csv"
 DAILY_REVIEW_CSV = DATA_DIR / "daily_review.csv"
 DISTRACTION_CSV = DATA_DIR / "distractions.csv"
+EVENTS_CSV = DATA_DIR / "events.csv"
+APP_VERSION = "v13.0.0"
 
 LOG_FIELDS = [
     "timestamp",
@@ -53,10 +57,48 @@ DAY_FIELDS = ["date", "day_type", "planned_start", "planned_end", "created_at"]
 PLAN_FIELDS = ["date", "priority_no", "task", "created_at"]
 TODO_FIELDS = ["id", "date", "task", "status", "created_at", "completed_at"]
 PRIVATE_FIELDS = ["timestamp", "date", "start", "end", "duration_min", "note"]
-REVIEW_FIELDS = ["date", "reviewed_at", "summary", "completed_priorities", "distractions", "overtime_justified", "improve_tomorrow"]
+REVIEW_FIELDS = [
+    "date",
+    "reviewed_at",
+    "summary",
+    "completed_priorities",
+    "distractions",
+    "overtime_justified",
+    "overtime_done_hours",
+    "overtime_accounted_hours",
+    "overtime_accounted_status",
+    "improve_tomorrow",
+]
 DISTRACTION_FIELDS = ["timestamp", "date", "start", "end", "duration_min", "context", "reason", "task", "note"]
+EVENT_FIELDS = [
+    "timestamp",
+    "date",
+    "start",
+    "end",
+    "duration_min",
+    "type",
+    "task",
+    "note",
+    "active_app",
+    "window_title",
+    "source",
+]
 
-OVERTIME_HEADERS = ["Date", "Start", "End", "Duration hours", "Task", "Reason", "Note", "Logged at", "Source"]
+OVERTIME_HEADERS = [
+    "Date",
+    "Start",
+    "End",
+    "Duration hours",
+    "Task",
+    "Reason",
+    "Note",
+    "Logged at",
+    "Source",
+    "Accounted in time management",
+    "Accounted hours",
+    "Accounted at",
+    "Accounted note",
+]
 
 
 @dataclass
@@ -70,6 +112,7 @@ class DayStatus:
 
 def ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    repair_log_csv(verbose=False)
     ensure_csv(LOG_CSV, LOG_FIELDS)
     ensure_csv(DAY_STATUS_CSV, DAY_FIELDS)
     ensure_csv(DAILY_PLAN_CSV, PLAN_FIELDS)
@@ -77,6 +120,7 @@ def ensure_data_dir() -> None:
     ensure_csv(PRIVATE_CSV, PRIVATE_FIELDS)
     ensure_csv(DAILY_REVIEW_CSV, REVIEW_FIELDS)
     ensure_csv(DISTRACTION_CSV, DISTRACTION_FIELDS)
+    ensure_csv(EVENTS_CSV, EVENT_FIELDS)
 
 
 def ensure_csv(path: Path, fields: list[str]) -> None:
@@ -85,6 +129,98 @@ def ensure_csv(path: Path, fields: list[str]) -> None:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
 
+
+def expected_header(fields: list[str]) -> str:
+    return ",".join(fields)
+
+
+def _looks_like_iso_date(text: str) -> bool:
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", (text or "").strip()))
+
+
+def _looks_like_timestamp(text: str) -> bool:
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}:\d{2}", (text or "").strip()))
+
+
+def repair_log_csv(verbose: bool = True) -> bool:
+    """Repair legacy/corrupt autotime_log.csv headers in-place.
+
+    Older tracker versions sometimes reused a CSV with a different header or
+    appended rows without the current header. The summary depends on named
+    columns, so this function normalizes the file to LOG_FIELDS while keeping
+    rows that look recoverable. A timestamped backup is created before repair.
+    """
+    if not LOG_CSV.exists() or LOG_CSV.stat().st_size == 0:
+        return False
+    raw = LOG_CSV.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not raw:
+        return False
+    current_header = raw[0].strip().lstrip("\ufeff")
+    if current_header == expected_header(LOG_FIELDS):
+        return False
+
+    backup = LOG_CSV.with_name(f"autotime_log_backup_before_v12_{now_local().strftime('%Y%m%d_%H%M%S')}.csv")
+    backup.write_text("\n".join(raw) + "\n", encoding="utf-8")
+
+    repaired: list[dict[str, str]] = []
+    for line in raw:
+        if not line.strip():
+            continue
+        if line.lower().startswith("timestamp,"):
+            continue
+        try:
+            parts = next(csv.reader([line]))
+        except Exception:
+            continue
+        parts = [p.strip() for p in parts]
+
+        # Current/new row without a proper file header:
+        # timestamp,date,start,end,duration_min,mode,task,note,active_app,window_title
+        if len(parts) >= 6 and _looks_like_timestamp(parts[0]) and _looks_like_iso_date(parts[1]):
+            row = {field: "" for field in LOG_FIELDS}
+            for field, value in zip(LOG_FIELDS, parts[:len(LOG_FIELDS)]):
+                row[field] = value
+            repaired.append(row)
+            continue
+
+        # Very old AutoTime row:
+        # timestamp,entry,active_app,window_title
+        if len(parts) >= 2 and _looks_like_timestamp(parts[0]):
+            try:
+                dt = datetime.fromisoformat(parts[0].replace(" ", "T"))
+                day = dt.date().isoformat()
+            except Exception:
+                day = parts[0][:10]
+            row = {field: "" for field in LOG_FIELDS}
+            row.update({
+                "timestamp": parts[0],
+                "date": day,
+                "start": "",
+                "end": "",
+                "duration_min": "0",
+                "mode": "legacy",
+                "task": parts[1] if len(parts) > 1 else "",
+                "note": "imported from legacy log during v12 repair",
+                "active_app": parts[2] if len(parts) > 2 else "",
+                "window_title": parts[3] if len(parts) > 3 else "",
+            })
+            repaired.append(row)
+
+    write_csv(LOG_CSV, LOG_FIELDS, repaired)
+    if verbose:
+        print(f"Repaired {LOG_CSV}")
+        print(f"Backup saved to {backup}")
+        print(f"Recovered rows: {len(repaired)}")
+    return True
+
+
+def log_header_status() -> str:
+    if not LOG_CSV.exists():
+        return "missing"
+    first = LOG_CSV.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+    if not first:
+        return "empty"
+    return "OK" if first[0].strip().lstrip("\ufeff") == expected_header(LOG_FIELDS) else "needs repair"
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
@@ -500,7 +636,7 @@ def choose_task(
 ) -> str:
     todos = active_todos()
     choices = [f"#{r['id']} {r['task']}" for r in todos]
-    choices.extend(["Add new task", "Other / type manually", "Admin / email / meetings"])
+    choices.extend(["Add new task", "Other / type manually", "Admin / email / meetings", "Add meeting/focus block"])
     if include_nonwork:
         choices.extend(["Break", "Distracted / not productive"])
     choices.append("Skip")
@@ -514,26 +650,47 @@ def choose_task(
         return task.strip()
     if choice == "Other / type manually":
         return input_dialog("Activity", "What are you working on?", "").strip()
+    if choice == "Add meeting/focus block":
+        return "__ADD_BLOCK__"
     if choice.startswith("#"):
         return re.sub(r"^#\d+\s+", "", choice).strip()
     return choice.strip()
 
 
-def log_activity(mode: str, task: str, start_dt: datetime, end_dt: datetime, note: str = "") -> None:
-    app, title = active_app_info()
-    duration = max(0, int((end_dt - start_dt).total_seconds() // 60))
-    append_csv(LOG_CSV, LOG_FIELDS, {
+def log_event(event_type: str, task: str, start_dt: datetime, end_dt: datetime, note: str = "", active_app: str = "", window_title: str = "", source: str = "tracker") -> None:
+    duration_min = max(0, int((end_dt - start_dt).total_seconds() // 60))
+    append_csv(EVENTS_CSV, EVENT_FIELDS, {
         "timestamp": now_local().isoformat(sep=" "),
         "date": start_dt.date().isoformat(),
         "start": start_dt.strftime("%H:%M"),
         "end": end_dt.strftime("%H:%M"),
-        "duration_min": str(duration),
+        "duration_min": str(duration_min),
+        "type": event_type,
+        "task": task,
+        "note": note,
+        "active_app": active_app,
+        "window_title": window_title,
+        "source": source,
+    })
+
+
+def log_activity(mode: str, task: str, start_dt: datetime, end_dt: datetime, note: str = "") -> None:
+    active_app, window_title = active_app_info()
+    duration_min = max(0, int((end_dt - start_dt).total_seconds() // 60))
+    row = {
+        "timestamp": now_local().isoformat(sep=" "),
+        "date": start_dt.date().isoformat(),
+        "start": start_dt.strftime("%H:%M"),
+        "end": end_dt.strftime("%H:%M"),
+        "duration_min": str(duration_min),
         "mode": mode,
         "task": task,
         "note": note,
-        "active_app": app,
-        "window_title": title,
-    })
+        "active_app": active_app,
+        "window_title": window_title,
+    }
+    append_csv(LOG_CSV, LOG_FIELDS, row)
+    log_event(mode, task, start_dt, end_dt, note=note, active_app=active_app, window_title=window_title, source="autotime_log")
 
 
 def _cell_text(value) -> str:
@@ -610,16 +767,26 @@ def _normalize_overtime_rows(ws) -> list[list]:
         # Current format: Date | Start | End | Duration hours | Task | Reason | Note | Logged at | Source
         current_date = _parse_date_cell(values[0] if len(values) > 0 else None)
         if current_date and len(values) >= 4:
+            duration_hours = _parse_hours(values[3] if len(values) > 3 else 0)
+            accounted_text = _cell_text(values[9] if len(values) > 9 else "")
+            accounted_hours = _parse_hours(values[10] if len(values) > 10 else 0)
+            # Older rows had a yes/no account flag but no accounted-hours column.
+            if accounted_hours == 0 and accounted_text.lower() in {"yes", "y", "true", "accounted", "all"}:
+                accounted_hours = duration_hours
             normalized = [
                 current_date.isoformat(),
                 _cell_text(values[1] if len(values) > 1 else ""),
                 _cell_text(values[2] if len(values) > 2 else ""),
-                _parse_hours(values[3] if len(values) > 3 else 0),
+                duration_hours,
                 _cell_text(values[4] if len(values) > 4 else ""),
                 _cell_text(values[5] if len(values) > 5 else ""),
                 _cell_text(values[6] if len(values) > 6 else ""),
                 _cell_text(values[7] if len(values) > 7 else ""),
                 _cell_text(values[8] if len(values) > 8 else "tracker"),
+                accounted_text,
+                accounted_hours,
+                _cell_text(values[11] if len(values) > 11 else ""),
+                _cell_text(values[12] if len(values) > 12 else ""),
             ]
 
         # Legacy format: Timestamp | Date | Weekday | Start | End | Duration min | Duration | Activity | Source | Notes
@@ -639,6 +806,10 @@ def _normalize_overtime_rows(ws) -> list[list]:
                 _cell_text(values[9]),
                 _cell_text(values[0]),
                 "legacy format",
+                "",
+                0.0,
+                "",
+                "",
             ]
 
         if not normalized:
@@ -673,14 +844,23 @@ def _write_overtime_workbook(wb: Workbook, rows: list[list]) -> None:
     if "Summary" in wb.sheetnames:
         del wb["Summary"]
     summary = wb.create_sheet("Summary")
-    total = round(sum(float(r[3] or 0) for r in rows), 2)
+    today = today_iso()
+    total_done = round(sum(float(r[3] or 0) for r in rows), 2)
+    total_accounted = round(sum(float(r[10] or 0) for r in rows), 2)
+    today_done = round(sum(float(r[3] or 0) for r in rows if str(r[0]) == today), 2)
+    today_accounted = round(sum(float(r[10] or 0) for r in rows if str(r[0]) == today), 2)
     summary.append(["Metric", "Value"])
-    summary.append(["Total overtime hours", total])
+    summary.append(["Today overtime done", today_done])
+    summary.append(["Today overtime accounted for", today_accounted])
+    summary.append(["Today overtime not yet accounted", max(0, round(today_done - today_accounted, 2))])
+    summary.append(["Total overtime done", total_done])
+    summary.append(["Total overtime accounted for", total_accounted])
+    summary.append(["Total overtime not yet accounted", max(0, round(total_done - total_accounted, 2))])
     summary.append(["Rows", len(rows)])
     summary.append(["Last cleaned", now_local().isoformat(sep=" ")])
     for cell in summary[1]:
         cell.font = Font(bold=True)
-    summary.column_dimensions["A"].width = 24
+    summary.column_dimensions["A"].width = 34
     summary.column_dimensions["B"].width = 24
 
 
@@ -724,7 +904,7 @@ def style_overtime_sheet(ws) -> None:
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.fill = header_fill
-    widths = [14, 10, 10, 15, 32, 24, 38, 22, 18]
+    widths = [14, 10, 10, 15, 32, 24, 38, 22, 18, 28, 16, 22, 38]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
@@ -747,6 +927,10 @@ def append_overtime(start_dt: datetime, end_dt: datetime, task: str, reason: str
             note,
             now_local().isoformat(sep=" "),
             "tracker",
+            "no",
+            0.0,
+            "",
+            "",
         ])
         _write_overtime_workbook(wb, rows)
         wb.save(OVERTIME_XLSX)
@@ -762,6 +946,10 @@ def append_overtime(start_dt: datetime, end_dt: datetime, task: str, reason: str
             "Note": note,
             "Logged at": now_local().isoformat(sep=" "),
             "Source": "tracker_pending_csv",
+            "Accounted in time management": "no",
+            "Accounted hours": "0",
+            "Accounted at": "",
+            "Accounted note": "",
         })
         message_dialog("Overtime saved to fallback", "overtime.xlsx seems to be open/locked. I saved this row to overtime_pending.csv instead.")
 
@@ -803,6 +991,35 @@ def in_quiet_period() -> bool:
     return False
 
 
+def quiet_until_text() -> str:
+    state = load_state()
+    quiet_until = state.get("quiet_until")
+    if not quiet_until:
+        return "none"
+    try:
+        until = datetime.fromisoformat(quiet_until)
+    except ValueError:
+        return f"invalid value: {quiet_until}"
+    if now_local() >= until:
+        return "expired"
+    return until.strftime("%Y-%m-%d %H:%M")
+
+
+def next_prompt_due_text(interval_minutes: int = 30) -> str:
+    state = load_state()
+    last_values = [v for k, v in state.items() if k.startswith("last_prompt_at") and v]
+    if not last_values:
+        return "now / no previous prompt recorded"
+    try:
+        last_dt = max(datetime.fromisoformat(v) for v in last_values)
+    except Exception:
+        return "unknown"
+    due = last_dt + timedelta(minutes=interval_minutes)
+    if now_local() >= due:
+        return "now"
+    return due.strftime("%Y-%m-%d %H:%M")
+
+
 
 def ask_distraction_reason(context: str = "", task: str = "") -> str:
     choice = choose_dialog(
@@ -842,6 +1059,9 @@ def log_distraction(start_dt: datetime, end_dt: datetime, context: str, reason: 
 
 def regular_prompt(interval_minutes: int) -> None:
     task = choose_task("Accountability check", "What are you working on?")
+    if task == "__ADD_BLOCK__":
+        add_block()
+        return
     if not task:
         return
     end_dt = now_local()
@@ -936,9 +1156,12 @@ def outside_hours_prompt(interval_minutes: int, status: DayStatus | None) -> Non
     choice = choose_dialog(
         "Outside planned time",
         prompt,
-        ["Work", "Private matter", "Break", "Distracted / not productive", "Skip"],
+        ["Work", "Private matter", "Break", "Distracted / not productive", "Add meeting/focus block", "Skip"],
     )
     if not choice or choice == "Skip":
+        return
+    if choice == "Add meeting/focus block":
+        add_block()
         return
     end_dt = now_local()
     start_dt = end_dt - timedelta(minutes=interval_minutes)
@@ -1019,9 +1242,155 @@ def overtime_total_for_day(day: str) -> float:
     return total
 
 
+def overtime_rows_for_day(day: str) -> list[dict[str, str]]:
+    """Return normalized overtime workbook rows for a date.
+
+    This lets the daily summary count overtime even if an older version wrote
+    overtime.xlsx but failed to mirror the same block into autotime_log.csv.
+    """
+    if not OVERTIME_XLSX.exists():
+        return []
+    try:
+        ensure_overtime_workbook()
+        wb = load_workbook(OVERTIME_XLSX, data_only=True)
+        ws = wb["Overtime"]
+    except Exception:
+        return []
+    rows: list[dict[str, str]] = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        values = list(row) + [""] * 13
+        row_date, start, end, hours, task, reason, note, logged_at, source, accounted, accounted_hours, accounted_at, accounted_note = values[:13]
+        try:
+            if date.fromisoformat(str(row_date)).isoformat() != day:
+                continue
+        except Exception:
+            continue
+        rows.append({
+            "date": str(row_date),
+            "start": _cell_text(start),
+            "end": _cell_text(end),
+            "hours": str(hours or 0),
+            "task": _cell_text(task),
+            "reason": _cell_text(reason),
+            "note": _cell_text(note),
+            "logged_at": _cell_text(logged_at),
+            "source": _cell_text(source),
+            "accounted": _cell_text(accounted),
+            "accounted_hours": str(accounted_hours or 0),
+            "accounted_at": _cell_text(accounted_at),
+            "accounted_note": _cell_text(accounted_note),
+        })
+    return rows
+
+
+
+def overtime_done_accounted_for_day(day: str | None = None) -> tuple[float, float]:
+    day = day or today_iso()
+    rows = overtime_rows_for_day(day)
+    done = 0.0
+    accounted = 0.0
+    for r in rows:
+        try:
+            done += float(r.get("hours") or 0)
+        except ValueError:
+            pass
+        try:
+            accounted += float(r.get("accounted_hours") or 0)
+        except ValueError:
+            # Older boolean-style accounted rows count as fully accounted.
+            if (r.get("accounted") or "").lower() in {"yes", "y", "true", "accounted", "all"}:
+                try:
+                    accounted += float(r.get("hours") or 0)
+                except ValueError:
+                    pass
+    return round(done, 2), round(accounted, 2)
+
+
+def mark_overtime_accounted(day: str | None = None, accounted_hours: float | None = None, note: str = "") -> tuple[float, float]:
+    """Mark today's overtime as accounted in the time-management system.
+
+    If accounted_hours is None, all overtime rows for the day are marked as accounted.
+    If a number is provided, rows are marked sequentially until that many hours are accounted.
+    """
+    day = day or today_iso()
+    ensure_overtime_workbook()
+    wb = load_workbook(OVERTIME_XLSX)
+    ws = wb["Overtime"]
+    rows = _normalize_overtime_rows(ws)
+    total = round(sum(float(r[3] or 0) for r in rows if str(r[0]) == day), 2)
+    if total <= 0:
+        return 0.0, 0.0
+
+    target = total if accounted_hours is None else max(0.0, min(float(accounted_hours), total))
+    remaining = target
+    stamp = now_local().isoformat(sep=" ")
+    account_note = note.strip() or "Overtime accounted for in time management"
+
+    # Reset today's accounting status first, then re-apply the current answer.
+    for r in rows:
+        if str(r[0]) == day:
+            r[9] = "no"
+            r[10] = 0.0
+            r[11] = ""
+            r[12] = ""
+
+    for r in rows:
+        if str(r[0]) != day or remaining <= 0:
+            continue
+        duration = float(r[3] or 0)
+        accounted = round(min(duration, remaining), 2)
+        if accounted <= 0:
+            continue
+        r[9] = "yes" if accounted >= duration else "partial"
+        r[10] = accounted
+        r[11] = stamp
+        r[12] = account_note
+        remaining = round(remaining - accounted, 2)
+
+    _write_overtime_workbook(wb, rows)
+    wb.save(OVERTIME_XLSX)
+    return total, round(target, 2)
+
+
+def ask_overtime_accounting(day: str | None = None) -> tuple[str, float, float]:
+    day = day or today_iso()
+    done, already_accounted = overtime_done_accounted_for_day(day)
+    if done <= 0:
+        return "no overtime", 0.0, 0.0
+
+    outstanding = max(0.0, round(done - already_accounted, 2))
+    choice = choose_dialog(
+        "Overtime accounting check",
+        (
+            f"Today overtime done: {done:.1f} h\n"
+            f"Already marked accounted: {already_accounted:.1f} h\n"
+            f"Not yet accounted: {outstanding:.1f} h\n\n"
+            "Have you already added this overtime to your time-management system?"
+        ),
+        ["Yes, all added", "Partly added", "No, not yet", "Skip"],
+    )
+    if choice == "Yes, all added":
+        note = input_dialog("Overtime accounting note", "Optional note", "Overtime accounted for in time management")
+        _, accounted = mark_overtime_accounted(day, None, note)
+        return "all accounted", done, accounted
+    if choice == "Partly added":
+        raw = input_dialog("Overtime accounting", "How many overtime hours did you already add?", f"{already_accounted:.1f}")
+        try:
+            hours = float(raw.replace(",", "."))
+        except ValueError:
+            hours = already_accounted
+        note = input_dialog("Overtime accounting note", "Optional note", "Overtime partly accounted for in time management")
+        _, accounted = mark_overtime_accounted(day, hours, note)
+        return "partly accounted", done, accounted
+    if choice == "No, not yet":
+        return "not yet accounted", done, already_accounted
+    return "skipped", done, already_accounted
+
 def build_daily_summary(day: str | None = None) -> str:
     day = day or today_iso()
     rows = [r for r in read_csv(LOG_CSV) if r.get("date") == day]
+    overtime_rows = overtime_rows_for_day(day)
+
     priorities = [r.get("task", "") for r in read_csv(DAILY_PLAN_CSV) if r.get("date") == day]
     status = get_day_status(day)
     planned = ""
@@ -1030,12 +1399,19 @@ def build_daily_summary(day: str | None = None) -> str:
     elif status:
         planned = f"Day type: {status.day_type}"
 
-    checks = len(rows)
+    # Some older versions wrote overtime.xlsx but did not also mirror the row
+    # into autotime_log.csv. Count those overtime rows as answered checks too,
+    # but avoid double-counting overtime rows that already exist in the log.
+    logged_overtime = sum(1 for r in rows if r.get("mode") == "overtime")
+    overtime_missing_from_log = max(0, len(overtime_rows) - logged_overtime)
+
+    checks = len(rows) + overtime_missing_from_log
     productive_modes = {"regular", "regular_block", "overtime"}
-    productive = sum(1 for r in rows if r.get("mode") in productive_modes)
+    productive = sum(1 for r in rows if r.get("mode") in productive_modes) + overtime_missing_from_log
     distracted = sum(1 for r in rows if r.get("mode") == "distracted")
     breaks_private = sum(1 for r in rows if r.get("mode") in {"private", "break", "private_block"})
-    overtime_hours = overtime_total_for_day(day)
+    overtime_hours, overtime_accounted = overtime_done_accounted_for_day(day)
+    overtime_unaccounted = max(0.0, round(overtime_hours - overtime_accounted, 2))
 
     task_minutes: dict[str, int] = {}
     for r in rows:
@@ -1047,6 +1423,19 @@ def build_daily_summary(day: str | None = None) -> str:
         except ValueError:
             minutes = 0
         task_minutes[task] = task_minutes.get(task, 0) + minutes
+
+    # Add overtime workbook tasks that are missing from the CSV log.
+    if overtime_missing_from_log:
+        for r in overtime_rows:
+            task = (r.get("task") or "").strip()
+            if not task:
+                continue
+            try:
+                minutes = int(round(float(r.get("hours") or 0) * 60))
+            except ValueError:
+                minutes = 0
+            task_minutes[task] = task_minutes.get(task, 0) + minutes
+
     main_task = "None yet"
     if task_minutes:
         task, mins = max(task_minutes.items(), key=lambda item: item[1])
@@ -1063,11 +1452,12 @@ def build_daily_summary(day: str | None = None) -> str:
         f"Productive/work blocks: {productive}\n"
         f"Break/private blocks: {breaks_private}\n"
         f"Distracted blocks: {distracted}\n"
-        f"Overtime: {overtime_hours:.1f} h\n"
+        f"Overtime done: {overtime_hours:.1f} h\n"
+        f"Overtime accounted for: {overtime_accounted:.1f} h\n"
+        f"Overtime not yet accounted: {overtime_unaccounted:.1f} h\n"
         f"Main task: {main_task}"
         f"{priority_text}"
     )
-
 
 def review_already_done(day: str | None = None) -> bool:
     day = day or today_iso()
@@ -1099,6 +1489,12 @@ def run_daily_review(force: bool = False) -> None:
         return
     summary = build_daily_summary(day)
     message_dialog("Daily summary", summary)
+
+    # v13: before the subjective review, ask whether today's overtime has
+    # already been added to the user's official/time-management system.
+    overtime_accounting_status, overtime_done, overtime_accounted = ask_overtime_accounting(day)
+    summary = build_daily_summary(day)
+
     completed = input_dialog(
         "End-of-day review",
         "Did you complete your top priorities today?\nWrite a short note.",
@@ -1111,8 +1507,8 @@ def run_daily_review(force: bool = False) -> None:
     )
     overtime_note = input_dialog(
         "End-of-day review",
-        "Any overtime today? Was it justified?",
-        "",
+        "Optional overtime note / reason for record.",
+        overtime_accounting_status,
     )
     improve = input_dialog(
         "End-of-day review",
@@ -1126,12 +1522,14 @@ def run_daily_review(force: bool = False) -> None:
         "completed_priorities": completed,
         "distractions": distractions,
         "overtime_justified": overtime_note,
+        "overtime_done_hours": f"{overtime_done:.2f}",
+        "overtime_accounted_hours": f"{overtime_accounted:.2f}",
+        "overtime_accounted_status": overtime_accounting_status,
         "improve_tomorrow": improve,
     })
     state = load_state()
     state[f"daily_review_done_{day}"] = True
     save_state(state)
-
 
 def show_daily_summary() -> None:
     message_dialog("Daily summary", build_daily_summary())
@@ -1243,10 +1641,115 @@ def done_todo_cli(todo_id: str) -> None:
         print(f"Todo #{todo_id} not found.")
 
 
+def today_counts(day: str | None = None) -> dict[str, float | int]:
+    day = day or today_iso()
+    rows = [r for r in read_csv(LOG_CSV) if r.get("date") == day]
+    logged_overtime = sum(1 for r in rows if r.get("mode") == "overtime")
+    overtime_rows = overtime_rows_for_day(day)
+    overtime_missing = max(0, len(overtime_rows) - logged_overtime)
+    return {
+        "log_rows": len(rows),
+        "checks": len(rows) + overtime_missing,
+        "regular": sum(1 for r in rows if r.get("mode") in {"regular", "regular_block"}),
+        "overtime_rows": len(overtime_rows),
+        "overtime_hours": overtime_done_accounted_for_day(day)[0],
+        "overtime_accounted_hours": overtime_done_accounted_for_day(day)[1],
+        "private_break_distracted": sum(1 for r in rows if r.get("mode") in {"private", "private_block", "break", "distracted"}),
+    }
+
+
+def launchagent_status() -> tuple[str, str]:
+    plist = Path.home() / "Library/LaunchAgents/com.gunjan.accountability.plist"
+    runner = Path.home() / ".accountability_tracker/run_accountability.sh"
+    status = "not checked"
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=10)
+            line = next((ln for ln in result.stdout.splitlines() if "com.gunjan.accountability" in ln), "")
+            status = line.strip() or "not loaded"
+        except Exception as exc:
+            status = f"could not query launchctl: {exc}"
+    runner_text = ""
+    if runner.exists():
+        try:
+            runner_text = runner.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            runner_text = "exists but could not read"
+    else:
+        runner_text = "runner missing"
+    return status, f"plist={plist} | runner={runner} | runner_content={runner_text}"
+
+
+def show_status(interval_minutes: int = 30) -> None:
+    ensure_data_dir()
+    counts = today_counts()
+    status = get_day_status()
+    planned = "not set"
+    if status:
+        planned = status.day_type
+        if status.planned_start or status.planned_end:
+            planned += f" {status.planned_start}-{status.planned_end}"
+    text = (
+        f"Accountability Tracker {APP_VERSION}\n"
+        f"Today: {today_iso()}\n"
+        f"Day status: {planned}\n"
+        f"Data folder: {DATA_DIR}\n"
+        f"Log header: {log_header_status()}\n"
+        f"Today checks: {counts['checks']}\n"
+        f"Today log rows: {counts['log_rows']}\n"
+        f"Today overtime done: {counts['overtime_hours']:.1f} h\n"
+        f"Today overtime accounted: {counts['overtime_accounted_hours']:.1f} h\n"
+        f"Quiet until: {quiet_until_text()}\n"
+        f"Next prompt due: {next_prompt_due_text(interval_minutes)}"
+    )
+    print(text)
+    message_dialog("Tracker status", text)
+
+
+def run_doctor(interval_minutes: int = 30) -> None:
+    ensure_data_dir()
+    repaired = repair_log_csv(verbose=True)
+    ensure_overtime_workbook()
+    status_line, runner_details = launchagent_status()
+    counts = today_counts()
+    repo = Path(__file__).resolve().parent
+    problems: list[str] = []
+    if log_header_status() != "OK":
+        problems.append("autotime_log.csv header still needs repair")
+    if sys.platform == "darwin" and "com.gunjan.accountability" not in status_line:
+        problems.append("LaunchAgent is not loaded. Run ./start_accountability.sh 30")
+    runner_path_hint = str(repo)
+    if "runner_content=" in runner_details and runner_path_hint not in runner_details:
+        problems.append("LaunchAgent runner may point to an older folder. Run ./start_accountability.sh 30 from this repo.")
+
+    text = (
+        f"Accountability Tracker doctor ({APP_VERSION})\n"
+        f"Script folder: {repo}\n"
+        f"Data folder: {DATA_DIR}\n"
+        f"Log header: {log_header_status()}\n"
+        f"Log repair run: {'yes' if repaired else 'not needed'}\n"
+        f"Today checks: {counts['checks']}\n"
+        f"Today overtime done: {counts['overtime_hours']:.1f} h\n"
+        f"Today overtime accounted: {counts['overtime_accounted_hours']:.1f} h\n"
+        f"Quiet until: {quiet_until_text()}\n"
+        f"Next prompt due: {next_prompt_due_text(interval_minutes)}\n"
+        f"LaunchAgent: {status_line}\n"
+        f"Runner: {runner_details}\n"
+        f"Problems: {', '.join(problems) if problems else 'none detected'}"
+    )
+    print(text)
+    message_dialog("Tracker doctor", text)
+
+
 def open_paths() -> None:
     ensure_data_dir()
     ensure_overtime_workbook()
-    subprocess.run(["open", str(DATA_DIR)])
+    if sys.platform == "darwin":
+        subprocess.run(["open", str(DATA_DIR)])
+    elif sys.platform.startswith("win"):
+        subprocess.run(["explorer", str(DATA_DIR)])
+    else:
+        subprocess.run(["xdg-open", str(DATA_DIR)])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1255,6 +1758,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-minutes", type=int, default=30, help="Visible prompt interval")
     parser.add_argument("--day-setup", action="store_true", help="Force daily setup popup")
     parser.add_argument("--add-block", action="store_true", help="Manually add a time block")
+    parser.add_argument("--meeting", action="store_true", help="Add a meeting/focus block and pause prompts until it ends")
     parser.add_argument("--open", action="store_true", help="Open data folder")
     parser.add_argument("--list-todos", action="store_true", help="List today's active todos")
     parser.add_argument("--add-todo", type=str, help="Add a todo for today")
@@ -1262,6 +1766,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary", action="store_true", help="Show today's daily summary popup")
     parser.add_argument("--review", action="store_true", help="Run end-of-day review now")
     parser.add_argument("--carry-over", action="store_true", help="Offer todo carry-over now")
+    parser.add_argument("--status", action="store_true", help="Show tracker status and next prompt information")
+    parser.add_argument("--doctor", action="store_true", help="Run health check and repair common log/header problems")
+    parser.add_argument("--repair-logs", action="store_true", help="Repair autotime_log.csv header/legacy rows")
+    parser.add_argument("--account-overtime", action="store_true", help="Mark today's overtime as already added to time management")
     args = parser.parse_args(argv)
 
     ensure_data_dir()
@@ -1269,7 +1777,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.day_setup:
         day_setup(force=True)
-    elif args.add_block:
+    elif args.add_block or args.meeting:
         add_block()
     elif args.open:
         open_paths()
@@ -1285,6 +1793,14 @@ def main(argv: list[str] | None = None) -> int:
         run_daily_review(force=True)
     elif args.carry_over:
         maybe_offer_todo_carryover(force=True)
+    elif args.status:
+        show_status(max(1, args.interval_minutes))
+    elif args.doctor:
+        run_doctor(max(1, args.interval_minutes))
+    elif args.repair_logs:
+        repair_log_csv(verbose=True)
+    elif args.account_overtime:
+        ask_overtime_accounting(today_iso())
     elif args.scheduled:
         scheduled_run(max(1, args.interval_minutes))
     else:
