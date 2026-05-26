@@ -40,7 +40,7 @@ If you choose work, it asks which task you are working on and adds a 30-minute e
 You can add a time block, for example:
 
 ```text
-14:00-15:30 meeting with Josh
+14:00-15:30 meeting with Peter
 ```
 
 During that block, the tracker will not interrupt you with check-ins.
