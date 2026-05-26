@@ -1,349 +1,400 @@
+# Accountability Tracker
 
-## v13 overtime accounting check
+A lightweight personal accountability and overtime-management tool for macOS.
 
-Version 13 adds end-of-day overtime accounting:
+The tracker asks short check-in questions during the day so you can see whether you are spending time on what you planned. It also records work done outside your planned work window as overtime and helps you confirm whether that overtime has already been added to your official time-management system.
 
-- During the daily review, if you logged overtime, it asks whether you already added that overtime to your official time-management system.
-- `overtime.xlsx` now has accounting columns: `Accounted in time management`, `Accounted hours`, `Accounted at`, and `Accounted note`.
-- The `Summary` sheet now shows overtime done, overtime accounted for, and overtime not yet accounted.
-- You can manually run the accounting check with:
+This project is intended for personal use. All logs are stored locally on your computer.
 
-```bash
-uv run python accountability_prompt.py --account-overtime
+---
+
+## What it does
+
+### Daily setup
+
+At the start of the day, the tracker asks:
+
+- Is today a regular work day, holiday, leave, sick day, or irregular day?
+- What is your planned work window? For example: `09:30-18:00`
+- What are your main tasks or priorities for today?
+
+### During planned working hours
+
+Every 30 minutes, it asks what you are working on.
+
+The answer is saved as a regular accountability check.
+
+### Outside planned working hours
+
+If you are using the laptop before or after your planned work window, it asks whether this is:
+
+- work
+- private matter
+- break
+- distracted / not productive
+
+If you choose work, it asks which task you are working on and adds a 30-minute entry to the overtime sheet.
+
+### Meeting or focus blocks
+
+You can add a time block, for example:
+
+```text
+14:00-15:30 meeting with Josh
 ```
 
-# Accountability Tracker v13
+During that block, the tracker will not interrupt you with check-ins.
 
-A lightweight local macOS self-accountability and overtime management system.
+### End-of-day review
 
-This project is no longer SAP-focused. It is designed to help you:
+At the end of the day, the tracker can show a summary and ask whether any overtime has already been added to your official time-management system.
 
-- plan the day in the morning
-- answer a 30-minute accountability check
-- track todos and task focus
-- classify outside-hours activity as work, private, break, or distracted
-- keep a live overtime workbook
-- review the day and carry unfinished tasks forward
+The overtime sheet tracks both:
 
+- overtime done
+- overtime accounted for
 
+---
 
+## Files created by the tracker
 
-## v12 reliability commands
+The tracker stores your personal data locally in:
 
-Run a quick status check:
-
-```bash
-uv run python accountability_prompt.py --status
+```text
+~/Documents/autotime_sap/
 ```
 
-Run the doctor/repair command:
+Main files:
 
-```bash
-uv run python accountability_prompt.py --doctor
+```text
+autotime_log.csv       # regular accountability checks
+overtime.xlsx          # overtime records and overtime accounting status
+day_status.csv         # day type and planned work window
+daily_review.csv       # end-of-day reflections
+distractions.csv       # distraction notes, if any
 ```
 
-Repair only the activity log header:
+The folder name still contains `autotime_sap` for backward compatibility with earlier versions.
 
-```bash
-uv run python accountability_prompt.py --repair-logs
-```
+Do not commit these files to GitHub.
 
-After updating versions, restart the LaunchAgent so macOS uses this folder:
+---
 
-```bash
-./stop_accountability.sh
-./start_accountability.sh 30
-```
+## Installation
 
+### 1. Install uv
 
-## v11/v12 fixes
+The project uses `uv` to run Python commands.
 
-Version 13 is a reliability cleanup release. It includes the v11 fixes and adds diagnostics:
-
-- Automatic repair for old or corrupted `autotime_log.csv` headers.
-- Daily summary counts both normal log rows and overtime workbook rows.
-- Meeting/focus blocks are visible in the popup and via `--meeting`.
-- `--status` shows day status, next prompt, quiet period, and today's counts.
-- `--doctor` checks the LaunchAgent, runner path, log header, overtime file, and common configuration problems.
-
-Quick meeting command:
-
-```bash
-uv run python accountability_prompt.py --meeting
-```
-
-or:
-
-```bash
-./add_meeting_block.sh
-```
-
-
-## v10 overtime sheet fix
-
-Version 10 fixes the messy `overtime.xlsx` issue. When the tracker opens the overtime workbook, it now:
-
-- removes repeated header rows
-- converts older legacy overtime rows into the current format
-- keeps the sheet name as `Overtime`
-- appends new rows without overwriting previous overtime
-- writes a small `Summary` sheet with total hours and row count
-
-## Existing overtime is preserved
-
-The default data folder is still:
-
-```bash
-~/Documents/autotime_sap
-```
-
-This is intentional because earlier versions already stored overtime here:
-
-```bash
-~/Documents/autotime_sap/overtime.xlsx
-```
-
-New overtime rows are appended to the existing `Overtime` sheet. The file is not overwritten.
-
-## Install
-
-From the repo folder:
+On macOS:
 
 ```bash
 brew install uv
+```
+
+Check that it works:
+
+```bash
+uv --version
+```
+
+### 2. Clone or download the repository
+
+Using Git:
+
+```bash
+git clone https://github.com/YOUR_GITHUB_USERNAME/accountability-tracker.git
+cd accountability-tracker
+```
+
+Or download the ZIP from GitHub, unzip it, and open Terminal inside the folder.
+
+### 3. Install the environment
+
+```bash
 uv sync
 ```
 
-## Start
+### 4. Make shell scripts executable
 
-For 30-minute accountability checks:
+```bash
+chmod +x *.sh
+```
+
+---
+
+## Start the tracker
+
+Start check-ins every 30 minutes:
 
 ```bash
 ./start_accountability.sh 30
 ```
 
-The LaunchAgent checks every minute, but the visible prompt appears only when needed.
+The tracker runs in the background using macOS LaunchAgent.
 
-## Stop
-
-```bash
-./stop_accountability.sh
-```
-
-## Daily workflow
-
-### Morning setup
-
-The first prompt asks what kind of day it is:
-
-- Regular work day
-- Holiday / irregular day
-- Leave
-- Sick day
-
-For a regular work day, enter your planned work window, for example:
-
-```text
-09:30-18:00
-```
-
-Then enter your top priorities for the day.
-
-If yesterday had unfinished todos, v9 asks whether to carry them into today.
-
-### During planned work hours
-
-Every 30 minutes it asks:
-
-```text
-What are you working on?
-```
-
-You can choose from today's todos, add a new task, choose admin/meetings, break, or distracted.
-
-If you choose `Distracted / not productive`, it asks what distracted you and saves the reason.
-
-### Outside planned work hours or irregular days
-
-It asks:
-
-```text
-Is this work, private, break, or distracted?
-```
-
-If you choose **Work**, it asks which task this work belongs to and appends 30 minutes to:
-
-```bash
-~/Documents/autotime_sap/overtime.xlsx
-```
-
-If you choose **Private**, **Break**, or **Distracted**, it is logged but not counted as overtime.
-
-## Overtime guardrails
-
-The tracker warns you when overtime is getting high:
-
-- 1+ hour today: shows a warning note
-- 2+ hours today: asks whether it is really necessary before logging
-- 5+ hours this week: shows a weekly warning
-- after 22:00: asks whether the work is urgent or avoidable
-
-## v9 features
-
-### 1. End-of-day review
-
-After your planned work window ends, the tracker shows a summary and asks:
-
-- Did you complete your top priorities?
-- What distracted you?
-- Any overtime today? Was it justified?
-- One thing to improve tomorrow?
-
-Saved to:
-
-```bash
-~/Documents/autotime_sap/daily_review.csv
-```
-
-Run manually:
-
-```bash
-uv run python accountability_prompt.py --review
-```
-
-### 2. Daily summary
-
-Shows a summary of the day:
-
-- planned work window
-- accountability checks answered
-- productive/work blocks
-- break/private blocks
-- distracted blocks
-- overtime hours
-- main task
-- top priorities
-
-Run manually:
-
-```bash
-uv run python accountability_prompt.py --summary
-```
-
-### 3. Distraction tracking
-
-If you mark a block as distracted, it asks for the reason:
-
-- YouTube / videos
-- Browsing / rabbit hole
-- Phone / WhatsApp
-- Unclear task
-- Tired / low energy
-- Meeting fatigue
-- Other
-
-Saved to:
-
-```bash
-~/Documents/autotime_sap/distractions.csv
-```
-
-### 4. Todo carry-over
-
-In the morning, unfinished todos from yesterday can be carried into today.
-
-Run manually:
-
-```bash
-uv run python accountability_prompt.py --carry-over
-```
-
-## Useful commands
-
-Force today's setup again:
-
-```bash
-uv run python accountability_prompt.py --day-setup
-```
-
-Add a meeting/focus/overtime block manually:
-
-```bash
-uv run python accountability_prompt.py --add-block
-```
-
-Example:
-
-```text
-20:00-21:00 HFMI paper revision
-```
-
-Open the data folder:
-
-```bash
-./open_accountability.sh
-```
-
-Open overtime directly:
-
-```bash
-open ~/Documents/autotime_sap/overtime.xlsx
-```
-
-List today's todos:
-
-```bash
-uv run python accountability_prompt.py --list-todos
-```
-
-Add a todo:
-
-```bash
-uv run python accountability_prompt.py --add-todo "HFMI paper revision"
-```
-
-Mark a todo done:
-
-```bash
-uv run python accountability_prompt.py --done 3
-```
-
-## Files created
-
-```text
-~/Documents/autotime_sap/day_status.csv        # day type and planned work window
-~/Documents/autotime_sap/daily_plan.csv        # morning top priorities
-~/Documents/autotime_sap/todos.csv             # todos for the day
-~/Documents/autotime_sap/autotime_log.csv      # accountability log
-~/Documents/autotime_sap/overtime.xlsx         # live overtime workbook
-~/Documents/autotime_sap/private_ignored.csv   # private/break/distracted outside-hours activity
-~/Documents/autotime_sap/distractions.csv      # distraction reasons
-~/Documents/autotime_sap/daily_review.csv      # end-of-day review
-```
-
-## Troubleshooting
-
-Check whether the LaunchAgent is running:
+Check that it is active:
 
 ```bash
 launchctl list | grep accountability
 ```
 
-Check errors:
+You should see something like:
 
-```bash
-cat ~/.accountability_tracker/launchd.err.log
+```text
+-    0    com.gunjan.accountability
 ```
 
-Run one prompt manually:
+---
+
+## Stop the tracker
 
 ```bash
-cd ~/accountability-tracker
+./stop_accountability.sh
+```
+
+---
+
+## Useful commands
+
+Run one accountability check manually:
+
+```bash
 uv run python accountability_prompt.py
 ```
 
-If `overtime.xlsx` is open in Excel/Numbers and cannot be written to, the script saves a fallback row in:
+Run daily setup again:
 
 ```bash
-~/Documents/autotime_sap/overtime_pending.csv
+uv run python accountability_prompt.py --day-setup
 ```
+
+Add a meeting or focus block:
+
+```bash
+uv run python accountability_prompt.py --meeting
+```
+
+Show today’s summary:
+
+```bash
+uv run python accountability_prompt.py --summary
+```
+
+Run end-of-day review:
+
+```bash
+uv run python accountability_prompt.py --review
+```
+
+Ask whether today’s overtime has been accounted for:
+
+```bash
+uv run python accountability_prompt.py --account-overtime
+```
+
+Check tracker status:
+
+```bash
+uv run python accountability_prompt.py --status
+```
+
+Run diagnostics:
+
+```bash
+uv run python accountability_prompt.py --doctor
+```
+
+---
+
+## Overtime sheet
+
+The overtime file is here:
+
+```text
+~/Documents/autotime_sap/overtime.xlsx
+```
+
+Open it with:
+
+```bash
+open ~/Documents/autotime_sap/overtime.xlsx
+```
+
+It contains an `Overtime` sheet and a `Summary` sheet.
+
+The summary tracks:
+
+```text
+Today overtime done
+Today overtime accounted for
+Today overtime not yet accounted
+Total overtime done
+Total overtime accounted for
+Total overtime not yet accounted
+```
+
+At the end of the day, the tracker can ask whether you already added today’s overtime to your official time-management system.
+
+---
+
+## Typical daily workflow
+
+### Morning
+
+When the first prompt appears:
+
+1. Choose the day type.
+2. Enter your planned work window, for example `09:30-18:00`.
+3. Add your main tasks for the day.
+
+### During the day
+
+Answer the 30-minute check-ins honestly.
+
+Examples:
+
+```text
+Instance segmentation
+XAI course preparation
+Admin / email / meetings
+Break
+Distracted / not productive
+```
+
+### During a meeting
+
+Run:
+
+```bash
+uv run python accountability_prompt.py --meeting
+```
+
+Enter something like:
+
+```text
+14:00-15:30 project meeting
+```
+
+The tracker will pause prompts until the block ends.
+
+### Evening
+
+Run:
+
+```bash
+uv run python accountability_prompt.py --summary
+uv run python accountability_prompt.py --review
+uv run python accountability_prompt.py --account-overtime
+```
+
+---
+
+## Troubleshooting
+
+### The tracker does not start
+
+Run:
+
+```bash
+chmod +x *.sh
+./start_accountability.sh 30
+```
+
+If that still fails:
+
+```bash
+bash ./start_accountability.sh 30
+```
+
+### Check whether the background job is active
+
+```bash
+launchctl list | grep accountability
+```
+
+### Check which script macOS is running
+
+```bash
+grep -H "accountability" ~/Library/LaunchAgents/*.plist
+```
+
+### Run diagnostics
+
+```bash
+uv run python accountability_prompt.py --doctor
+```
+
+This checks the LaunchAgent, log files, and current tracker status.
+
+### The summary looks wrong
+
+Repair and diagnose the logs:
+
+```bash
+uv run python accountability_prompt.py --doctor
+uv run python accountability_prompt.py --summary
+```
+
+The tracker includes automatic log-header repair for older CSV formats.
+
+---
+
+## Updating the tracker
+
+After replacing files with a newer version:
+
+```bash
+cd ~/accountability-tracker
+chmod +x *.sh
+uv sync
+./stop_accountability.sh
+./start_accountability.sh 30
+```
+
+Then commit the update:
+
+```bash
+git add .
+git commit -m "Update accountability tracker"
+git push
+```
+
+---
+
+## Privacy
+
+Your personal logs are stored locally under:
+
+```text
+~/Documents/autotime_sap/
+```
+
+The repository should contain only the code.
+
+Do not commit:
+
+```text
+*.csv
+*.xlsx
+*.log
+```
+
+The `.gitignore` file should exclude these by default.
+
+---
+
+## Project status
+
+Current version: v13
+
+Main features:
+
+- daily setup
+- 30-minute accountability checks
+- meeting/focus blocks
+- overtime tracking
+- overtime accounting status
+- daily summary
+- end-of-day review
+- diagnostics with `--doctor`
